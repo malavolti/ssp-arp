@@ -74,108 +74,105 @@ if __name__ == '__main__':
         tree = ET.parse(inputfile)
         root = tree.getroot()
 
-        idps = root.findall("./md:EntityDescriptor[md:IDPSSODescriptor]", utils.namespaces)
+        idp_EntityDescriptor = root.find(f"./md:EntityDescriptor[@entityID='{entityid_idp}']", utils.namespaces)
         sps = root.findall("./md:EntityDescriptor[md:SPSSODescriptor]", utils.namespaces)
 
         # IDPSSODescriptor
-        for EntityDescriptor in idps:
 
-            # Get entityID IdP
-            idp_entityID = utils.get_entityID(EntityDescriptor)
+        # Get entityID IdP
+        idp_entityID = utils.get_entityID(idp_EntityDescriptor)
 
-            if idp_entityID != entityid_idp: continue
+        if args.debug: print(f"IDP: {idp_entityID}")
 
-            if args.debug: print(f"IDP: {idp_entityID}")
+        # Get RegistrationAuthority
+        idp_regAuth = utils.get_RegistrationAuthority(idp_EntityDescriptor)
+
+        # Get RS EC
+        idp_rs = utils.has_EntityAttributes(idp_EntityDescriptor, 'http://macedir.org/entity-category-support',
+                                            'http://refeds.org/category/research-and-scholarship')
+
+        # Get COCO EC
+        idp_coco = utils.has_EntityAttributes(idp_EntityDescriptor, 'http://macedir.org/entity-category-support',
+                                              'http://www.geant.net/uri/dataprotection-code-of-conduct/v1')
+
+        # Get SIRTFI
+        idp_sirtfi = utils.has_EntityAttributes(idp_EntityDescriptor,
+                                                'urn:oasis:names:tc:SAML:attribute:assurance-certification',
+                                                'https://refeds.org/sirtfi')
+
+        # Discover is 'persistent' NameID is the preferred one
+        idp_persistent_nameid = utils.idp_supports_persistent_nameid(idp_EntityDescriptor)
+
+        if args.debug: print(
+            f"{idp_entityID} supports: RS=>{idp_rs}, COCO=>{idp_coco}, SIRTFI=>{idp_sirtfi}, persistent NameID=>{idp_persistent_nameid}")
+
+        # SPSSODescriptor
+        for EntityDescriptor in sps:
+
+            # Get SP entityID
+            sp_entityID = utils.get_entityID(EntityDescriptor)
 
             # Get RegistrationAuthority
-            idp_regAuth = utils.get_RegistrationAuthority(EntityDescriptor)
+            sp_regAuth = utils.get_RegistrationAuthority(EntityDescriptor)
 
             # Get RS EC
-            idp_rs = utils.has_EntityAttributes(EntityDescriptor, 'http://macedir.org/entity-category-support',
-                                                'http://refeds.org/category/research-and-scholarship')
+            sp_rs = utils.has_EntityAttributes(EntityDescriptor, 'http://macedir.org/entity-category',
+                                               'http://refeds.org/category/research-and-scholarship')
 
             # Get COCO EC
-            idp_coco = utils.has_EntityAttributes(EntityDescriptor, 'http://macedir.org/entity-category-support',
-                                                  'http://www.geant.net/uri/dataprotection-code-of-conduct/v1')
+            # sp_coco = utils.has_EntityAttributes(EntityDescriptor, 'http://macedir.org/entity-category',
+            #                                'http://www.geant.net/uri/dataprotection-code-of-conduct/v1')
 
             # Get SIRTFI
-            idp_sirtfi = utils.has_EntityAttributes(EntityDescriptor,
-                                                    'urn:oasis:names:tc:SAML:attribute:assurance-certification',
-                                                    'https://refeds.org/sirtfi')
+            sp_sirtfi = utils.has_EntityAttributes(EntityDescriptor,
+                                                   'urn:oasis:names:tc:SAML:attribute:assurance-certification',
+                                                   'https://refeds.org/sirtfi')
 
-            # Discover is 'persistent' NameID is the preferred one
-            idp_persistent_nameid = utils.idp_supports_persistent_nameid(EntityDescriptor)
+            # Get SP required attributes
+            sp_required_attributes = utils.get_required_attributes(EntityDescriptor)
+            if args.debug: print(f"sp_required_attributes: {sp_required_attributes}")
 
-            if args.debug: print(
-                f"{idp_entityID} supports: RS=>{idp_rs}, COCO=>{idp_coco}, SIRTFI=>{idp_sirtfi}, persistent NameID=>{idp_persistent_nameid}")
+            # Convert OID to Name attributes
+            o2n = attribute_map.oid2name
+            sp_attrs_list = []
+            for attr in sp_required_attributes:
+                sp_attrs_list.append(o2n[attr])
 
-            # SPSSODescriptor
-            for EntityDescriptor in sps:
+            # 1) If SP implement RS and IdP support it: releases all set of attributes
+            if sp_rs and idp_rs:
+                sp_attrs_list = ['eduPersonPrincipalName', 'eduPersonTargetedID', 'eduPersonScopedAffiliation',
+                                 'mail', 'displayName', 'givenName', 'sn']
 
-                # Get SP entityID
-                sp_entityID = utils.get_entityID(EntityDescriptor)
+            # 2) If SP is not member of the federation: remove all required attributes except eduPersonScopedAffiliation
+            # 2) If SP implements RS, but IdP does not support it: remove all required attributes except eduPersonScopedAffiliation
+            # 2) If SP implements CoCo, but IdP does not support it: remove all required attributes except eduPersonScopedAffiliation
+            # 2) If IdP supports RS, but SP does not implement it: remove all required attributes except eduPersonScopedAffiliation
+            # 2) If IdP supports CoCo, but SP does not implement it: remove all required attributes except eduPersonScopedAffiliation
+            elif sp_regAuth != 'http://www.idem.garr.it/':
+                sp_attrs_list = ['eduPersonScopedAffiliation']
 
-                # Get RegistrationAuthority
-                sp_regAuth = utils.get_RegistrationAuthority(EntityDescriptor)
+            # 3) Otherwise release all attributes required only
 
-                # Get RS EC
-                sp_rs = utils.has_EntityAttributes(EntityDescriptor, 'http://macedir.org/entity-category',
-                                                   'http://refeds.org/category/research-and-scholarship')
+            # Discover if SP prefers 'persistent' NameID from IdP
+            sp_requests_persistent_nameid = utils.sp_requests_persistent_nameid(EntityDescriptor)
+            if args.debug:
+                print(f"{sp_entityID} requests persistent NameID? {sp_requests_persistent_nameid}")
+            # Add 'eduPersonTargetedID' if SP does not have 'persistent' as first <md:NameIDFormat>
+            if sp_requests_persistent_nameid is False: sp_attrs_list.append('eduPersonTargetedID')
 
-                # Get COCO EC
-                # sp_coco = utils.has_EntityAttributes(EntityDescriptor, 'http://macedir.org/entity-category',
-                #                                'http://www.geant.net/uri/dataprotection-code-of-conduct/v1')
+            if args.debug:
+                print(f"IDP:{entityid_idp}, SP:{sp_entityID}, sp_regAuth:{sp_regAuth}")
+                print(f"Attributes:{sp_attrs_list}")
 
-                # Get SIRTFI
-                sp_sirtfi = utils.has_EntityAttributes(EntityDescriptor,
-                                                       'urn:oasis:names:tc:SAML:attribute:assurance-certification',
-                                                       'https://refeds.org/sirtfi')
+            sp_arp_dict = {
+                'sp_entityid': sp_entityID,
+                'arp_priority': '51',
+                'sp_attribute_list': utils.get_list_of_attributes_for_arp(sp_attrs_list)
+            }
+            sp_arp_list.append(sp_arp_dict)
 
-                # Get SP required attributes
-                sp_required_attributes = utils.get_required_attributes(EntityDescriptor)
-                if args.debug: print(f"sp_required_attributes: {sp_required_attributes}")
-
-                # Convert OID to Name attributes
-                o2n = attribute_map.oid2name
-                sp_attrs_list = []
-                for attr in sp_required_attributes:
-                    sp_attrs_list.append(o2n[attr])
-
-                # 1) If SP implement RS and IdP support it: releases all set of attributes
-                if sp_rs and idp_rs:
-                    sp_attrs_list = ['eduPersonPrincipalName', 'eduPersonTargetedID', 'eduPersonScopedAffiliation',
-                                     'mail', 'displayName', 'givenName', 'sn']
-
-                # 2) If SP is not member of the federation: remove all required attributes except eduPersonScopedAffiliation
-                # 2) If SP implements RS, but IdP does not support it: remove all required attributes except eduPersonScopedAffiliation
-                # 2) If SP implements CoCo, but IdP does not support it: remove all required attributes except eduPersonScopedAffiliation
-                # 2) If IdP supports RS, but SP does not implement it: remove all required attributes except eduPersonScopedAffiliation
-                # 2) If IdP supports CoCo, but SP does not implement it: remove all required attributes except eduPersonScopedAffiliation
-                elif sp_regAuth != 'http://www.idem.garr.it/':
-                    sp_attrs_list = ['eduPersonScopedAffiliation']
-
-                # 3) Otherwise release all attributes required only
-
-                # Discover if SP prefers 'persistent' NameID from IdP
-                sp_requests_persistent_nameid = utils.sp_requests_persistent_nameid(EntityDescriptor)
-                if args.debug:
-                    print(f"{sp_entityID} requests persistent NameID? {sp_requests_persistent_nameid}")
-                # Add 'eduPersonTargetedID' if SP does not have 'persistent' as first <md:NameIDFormat>
-                if sp_requests_persistent_nameid is False: sp_attrs_list.append('eduPersonTargetedID')
-
-                if args.debug:
-                    print(f"IDP:{entityid_idp}, SP:{sp_entityID}, sp_regAuth:{sp_regAuth}")
-                    print(f"Attributes:{sp_attrs_list}")
-
-                sp_arp_dict = {
-                    'sp_entityid': sp_entityID,
-                    'arp_priority': '51',
-                    'sp_attribute_list': utils.get_list_of_attributes_for_arp(sp_attrs_list)
-                }
-                sp_arp_list.append(sp_arp_dict)
-
-        if output_php_arp is None:
-            print(template.render(sp_arp_list=sp_arp_list))
-        else:
-            with open(output_php_arp, 'w') as f:
-                f.write(template.render(sp_arp_list=sp_arp_list))
+    if output_php_arp is None:
+        print(template.render(sp_arp_list=sp_arp_list))
+    else:
+        with open(output_php_arp, 'w') as f:
+            f.write(template.render(sp_arp_list=sp_arp_list))
